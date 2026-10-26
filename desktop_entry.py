@@ -28,6 +28,12 @@ def main():
         if errors or len(created)!=1:raise RuntimeError('Le traitement documentaire autonome a échoué.')
         assert 'Duo' in extract(created[0]['name'],created[0]['raw'])['text']
         report={'ok':True,'isolated_profiles':env['CODEX_HOME']!=str(Path.home()/'.codex') and env['CLAUDE_CONFIG_DIR']!=str(Path.home()/'.claude'),'credentials_shipped':False,'pdf_roundtrip':True}
+        if '--test-install' in sys.argv:
+            for provider in ('codex','claude'):
+                setup.run('install',provider)
+                state=setup.snapshot()
+                report[provider]={'ok':not bool(state['error']),'error':state['error'],'diagnostic':state.get('diagnostic','')}
+                if state['error']:report['ok']=False
         if '--report' in sys.argv:Path(sys.argv[sys.argv.index('--report')+1]).write_text(json.dumps(report),encoding='utf-8')
         return 0
     root=tk.Tk();root.title('Duo');root.geometry('560x360');root.resizable(False,False)

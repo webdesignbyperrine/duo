@@ -12,6 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 import threading
+import traceback
 import time
 import urllib.parse
 import urllib.request
@@ -41,7 +42,9 @@ def download_verified(spec, progress):
     parsed=urllib.parse.urlsplit(spec['url'])
     if parsed.scheme!='https' or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS or not re.fullmatch(r'[a-f0-9]{64}',spec['sha256']):
         raise ValueError('Source de téléchargement non autorisée.')
-    opener=urllib.request.build_opener(TrustedRedirects(), urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
+    bundled_ca = ROOT / 'certifi/cacert.pem'
+    ca_file = str(bundled_ca) if bundled_ca.is_file() else certifi.where()
+    opener=urllib.request.build_opener(TrustedRedirects(), urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file)))
     digest=hashlib.sha256()
     with tempfile.TemporaryFile() as output:
         with opener.open(urllib.request.Request(spec['url'],headers={'User-Agent':'Duo/0.2'}),timeout=40) as response:
@@ -141,7 +144,7 @@ class Setup:
                     if process.returncode:raise ValueError('La connexion n’a pas abouti. Vérifie le compte choisi puis réessaie.')
                 self.update(message='Connexion terminée. Vérifie le statut des comptes.' if action=='login' else 'Compte déconnecté de Duo.',url='',needs_code=False)
         except Exception as error:
-            self.update(error=str(error) if isinstance(error,ValueError) else 'Configuration impossible. Vérifie la connexion Internet et réessaie.',message='Configuration interrompue.',url='',needs_code=False)
+            self.update(diagnostic=' > '.join(Path(frame.filename).name+':'+str(frame.lineno)+':'+frame.name for frame in traceback.extract_tb(error.__traceback__)[-5:]),error=str(error) if isinstance(error,ValueError) else 'Configuration impossible. Vérifie la connexion Internet et réessaie.',message='Configuration interrompue.',url='',needs_code=False)
         finally:
             with self.lock:self.process=None
             self.update(busy=False)

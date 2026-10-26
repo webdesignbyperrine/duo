@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import shutil
+import ssl
 import subprocess
 import sys
 
@@ -28,6 +29,9 @@ def main():
     for source,destination in [('index.html','.'),('hosting.json','.'),('desktop/providers.lock.json','desktop'),('desktop/ocr-windows.ps1','desktop')]:
         command+=['--add-data',str(ROOT/source)+os.pathsep+destination]
     if sys.platform=='darwin':command+=['--add-binary',str(ROOT/'bin/duo-ocr')+os.pathsep+'bin']
+    runtime_ca = Path(ssl.__file__).resolve().parent / 'codex-rejected-cas.pem'
+    if runtime_ca.is_file():
+        command += ['--add-data',str(runtime_ca)+os.pathsep+'.']
     command+=['desktop_entry.py']
     subprocess.run(command,check=True)
     if sys.platform=='darwin':
