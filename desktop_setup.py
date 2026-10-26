@@ -1,6 +1,8 @@
 """Installation des binaires officiels vérifiés ; connexion personnelle sans terminal."""
 import hashlib
 import ssl
+import shutil
+import stat
 import certifi
 import io
 import json
@@ -106,24 +108,40 @@ class Setup:
                 spec=locks[provider].get(platform_key())
                 if not spec:raise ValueError('Cet ordinateur n’est pas encore pris en charge par cet installateur.')
                 raw=download_verified(spec,lambda text:self.update(message=text))
-                executable=extract_executable(raw,spec['archive'],provider)
                 tools=private_directory(user_data()/'tools')
-                target=tools/(provider+('.exe' if os.name=='nt' else ''))
-                temporary=target.with_name(target.stem+'.installing'+target.suffix)
-                try:
-                    temporary.write_bytes(executable);temporary.chmod(0o700)
-                    check=subprocess.run([str(temporary),'--version'],capture_output=True,text=True,timeout=30,env=provider_environment(),**hidden_process())
-                    if check.returncode:raise ValueError('Le programme téléchargé ne démarre pas sur cet ordinateur.')
-                    os.replace(temporary,target)
-                finally:temporary.unlink(missing_ok=True)
-                for extra in spec.get('additional', []):
-                    if not re.fullmatch(r'[a-z0-9-]+\.exe', extra['name']):raise ValueError('Nom de composant invalide.')
-                    payload=download_verified(extra,lambda text:self.update(message=text))
-                    helper=tools/extra['name']
-                    scratch=helper.with_suffix('.installing.exe')
+                if os.name=='nt' and provider=='codex' and spec['archive']=='zip':
+                    # The official Windows archive is a complete package, not one exe.
+                    # Preserve its helpers, metadata, DLLs and upstream licenses unchanged.
+                    with tempfile.TemporaryDirectory(prefix='codex-stage-',dir=tools) as stage_folder:
+                        stage=Path(stage_folder)/'package';stage.mkdir()
+                        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                            entries=archive.infolist()
+                            if len(entries)>1000 or sum(i.file_size for i in entries)>1024*1024*1024:
+                                raise ValueError('Archive du programme trop volumineuse.')
+                            for item in entries:
+                                path=Path(item.filename)
+                                if path.is_absolute() or '..' in path.parts or ':' in item.filename or '\\' in item.filename or stat.S_ISLNK(item.external_attr>>16):
+                                    raise ValueError('Chemin non autorisé dans l’archive officielle.')
+                                if item.is_dir():continue
+                                target=stage/path;target.parent.mkdir(parents=True,exist_ok=True)
+                                target.write_bytes(archive.read(item))
+                        executable=stage/'codex-x86_64-pc-windows-msvc.exe'
+                        if not executable.is_file():raise ValueError('Programme Windows absent de l’archive.')
+                        check=subprocess.run([str(executable),'--version'],capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=30,env=provider_environment(),**hidden_process())
+                        if check.returncode:raise ValueError('Le programme téléchargé ne démarre pas sur cet ordinateur.')
+                        destination=tools/'codex-package'
+                        if destination.exists():shutil.rmtree(destination)
+                        os.replace(stage,destination)
+                else:
+                    executable=extract_executable(raw,spec['archive'],provider)
+                    target=tools/(provider+('.exe' if os.name=='nt' else ''))
+                    temporary=target.with_name(target.stem+'.installing'+target.suffix)
                     try:
-                        scratch.write_bytes(payload);os.replace(scratch,helper)
-                    finally:scratch.unlink(missing_ok=True)
+                        temporary.write_bytes(executable);temporary.chmod(0o700)
+                        check=subprocess.run([str(temporary),'--version'],capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=30,env=provider_environment(),**hidden_process())
+                        if check.returncode:raise ValueError('Le programme téléchargé ne démarre pas sur cet ordinateur.')
+                        os.replace(temporary,target)
+                    finally:temporary.unlink(missing_ok=True)
                 self.update(message=('Codex' if provider=='codex' else 'Claude Code')+' est installé. Clique sur « Connecter mon abonnement ».')
             else:
                 command=[provider_binary(provider)]

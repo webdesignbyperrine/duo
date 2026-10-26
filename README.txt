@@ -3,7 +3,7 @@ Duo 0.2 — application personnelle installable (version de test)
 Installation sans terminal
 Mac : ouvrir l’image DMG, glisser Duo dans Applications, puis ouvrir Duo.
 Windows : ouvrir Duo-Windows-x64-Setup.exe et suivre l’assistant. Installation pour l’utilisateur courant, sans droits administrateur.
-Une fenêtre Duo propose « Ouvrir Duo et mes connexions » et « Quitter Duo ». L’interface s’ouvre dans le navigateur, sur une adresse locale. Garder l’application ouverte pendant les échanges.
+L’application ouvre directement son interface dans le navigateur, sur une adresse locale, sans fenêtre de terminal. « Quitter Duo » ferme l’application et efface les discussions. Après la fermeture de tous les onglets, l’application s’arrête aussi automatiquement après le nettoyage des traitements en cours.
 
 Première utilisation
 Dans « Mes connexions », cliquer sur « Installer Codex officiel » et « Installer Claude Code officiel ». Les programmes sont téléchargés depuis les sources officielles, avec une version et une empreinte SHA-256 fixes. Leurs binaires ne sont pas modifiés.

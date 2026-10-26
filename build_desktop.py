@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import shutil
 import ssl
 import subprocess
@@ -35,6 +36,9 @@ def main():
     command+=['desktop_entry.py']
     subprocess.run(command,check=True)
     if sys.platform=='darwin':
+        plist_path=ROOT/'dist/Duo.app/Contents/Info.plist'
+        plist=plistlib.loads(plist_path.read_bytes());plist['LSUIElement']=True
+        plist_path.write_bytes(plistlib.dumps(plist))
         subprocess.run(['xattr','-cr',str(ROOT/'dist/Duo.app')],check=True)
         subprocess.run(['codesign','--force','--deep','--sign','-',str(ROOT/'dist/Duo.app')],check=True)
         subprocess.run(['codesign','--verify','--deep','--strict',str(ROOT/'dist/Duo.app')],check=True)

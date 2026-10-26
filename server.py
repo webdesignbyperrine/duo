@@ -48,7 +48,7 @@ def authentication():
     for name in ('codex', 'claude'):
         try:
             command = [binary(name)] + (['login', 'status'] if name == 'codex' else ['auth', 'status'])
-            result = subprocess.run(command, capture_output=True, text=True, timeout=15, env=environment(), cwd=tempfile.gettempdir(), **hidden_process())
+            result = subprocess.run(command, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=15, env=environment(), cwd=tempfile.gettempdir(), **hidden_process())
             if name == 'codex':
                 ok = result.returncode == 0 and 'using ChatGPT' in result.stdout + result.stderr
             else:
@@ -503,6 +503,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {})
 
     def do_POST(self):
+        tracking = hasattr(self.server, 'requests_lock')
+        if tracking:
+            with self.server.requests_lock:self.server.active_requests += 1
+        try:
+            return self.post_request()
+        finally:
+            if tracking:
+                with self.server.requests_lock:self.server.active_requests -= 1
+
+    def post_request(self):
         if not self.allowed() or not self.origin_allowed():
             return self.send(403, {'error': 'Accès refusé'})
         try:
@@ -525,6 +535,12 @@ class Handler(BaseHTTPRequestHandler):
             discussion = sessions.get(self.headers.get('X-Duo-Session'))
             if discussion is None:
                 return self.send(410, {'error': 'Cette discussion a été effacée. Ouvre une nouvelle discussion.'})
+            if self.path == '/app/quit':
+                if not DESKTOP:raise ValueError('Action réservée à l’application installée.')
+                sessions.close();setup.cancel()
+                self.send(200, {'ended': True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             if self.path == '/setup/action':
                 if discussion.snapshot()['running']:
                     raise ValueError('Attends la fin de la réponse avant de modifier les connexions.')

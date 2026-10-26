@@ -46,6 +46,9 @@ def provider_binary(name):
     if name not in ('codex', 'claude'):
         raise ValueError('Assistant inconnu.')
     if DESKTOP:
+        if os.name=='nt' and name=='codex':
+            packaged = user_data() / 'tools/codex-package/codex-x86_64-pc-windows-msvc.exe'
+            if packaged.is_file():return str(packaged)
         path = user_data() / 'tools' / (name + ('.exe' if os.name == 'nt' else ''))
         if path.is_file():
             return str(path)
