@@ -35,7 +35,7 @@ jobs:
         env:
           DUO_DATA_DIR: ${{ runner.temp }}/duo-clean-profile
         run: |
-          dist/Duo.app/Contents/MacOS/Duo --self-test --report release/self-test.json
+          dist/Duo.app/Contents/MacOS/Duo --self-test --test-install --report release/self-test.json
           python -c "import json; assert json.load(open('release/self-test.json'))['ok']"
           codesign --verify --deep --strict dist/Duo.app
       - name: Vérifier l’application Windows autonome
@@ -44,7 +44,7 @@ jobs:
           DUO_DATA_DIR: ${{ runner.temp }}/duo-clean-profile
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath 'dist/Duo/Duo.exe' -ArgumentList '--self-test','--report','release/self-test.json' -PassThru -Wait
+          $process = Start-Process -FilePath 'dist/Duo/Duo.exe' -ArgumentList '--self-test','--test-install','--report','release/self-test.json' -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw 'Le contrôle autonome a échoué.' }
           python -c "import json; assert json.load(open('release/self-test.json'))['ok']"
       - uses: actions/upload-artifact@v4
