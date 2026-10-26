@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 
-ROOT = Path(__file__).resolve().parent
+from runtime_paths import ROOT, worker_command, hidden_process
 RUNTIME = Path.home() / '.cache/codex-runtimes/codex-primary-runtime/dependencies'
 MAX_FILE = 12 * 1024 * 1024
 MAX_TOTAL = 30 * 1024 * 1024
@@ -42,16 +43,14 @@ def decode_upload(data):
 
 def extract(name, raw):
     """Le parseur travaille dans un processus borné ; seuls les résultats reviennent."""
-    python = RUNTIME / 'python/bin/python3'
-    if not python.exists():
-        python = Path(sys.executable)
     with tempfile.TemporaryDirectory(prefix='duo-piece-') as folder:
         path = Path(folder) / ('piece' + Path(name).suffix.lower())
         path.write_bytes(raw)
         try:
-            result = subprocess.run([str(python), str(Path(__file__).resolve()), str(path)], capture_output=True, text=True, timeout=120)
-            data = json.loads(result.stdout)
-        except (subprocess.TimeoutExpired, ValueError):
+            output = Path(folder) / 'result.json'
+            result = subprocess.run(worker_command('extract', path, output), capture_output=True, text=True, timeout=120, **hidden_process())
+            data = json.loads(output.read_text(encoding='utf-8'))
+        except (OSError, subprocess.TimeoutExpired, ValueError):
             raise ValueError('Lecture impossible ou trop longue pour ' + name + '. Essaie une version plus légère.')
         if result.returncode or data.get('error'):
             raise ValueError(name + ' : ' + data.get('error', 'lecture impossible'))
@@ -64,10 +63,15 @@ def extract(name, raw):
 
 
 def ocr(path):
+    if os.name == 'nt':
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(ROOT / 'desktop/ocr-windows.ps1'), str(Path(path).resolve())], capture_output=True, timeout=40, **hidden_process())
+        if result.returncode:
+            raise ValueError('La reconnaissance de texte de Windows n’a pas pu lire cette image. Vérifie les langues installées ou fournis un document avec du texte sélectionnable.')
+        return result.stdout.decode('utf-8-sig').strip()
     binary = ROOT / 'bin/duo-ocr'
     if not binary.is_file():
         raise ValueError('La lecture des images n’est pas installée. Utilise un document contenant du texte sélectionnable.')
-    result = subprocess.run([str(binary), str(path)], capture_output=True, text=True, timeout=40)
+    result = subprocess.run([str(binary), str(path)], capture_output=True, text=True, timeout=40, **hidden_process())
     if result.returncode:
         raise ValueError('La reconnaissance du texte de cette image a échoué.')
     return result.stdout.strip()
@@ -121,12 +125,15 @@ def parse(path):
             if not text.strip():
                 with tempfile.TemporaryDirectory(prefix='duo-page-') as folder:
                     prefix = Path(folder) / 'scan'
-                    converter = RUNTIME / 'bin/override/pdftoppm'
-                    if not converter.is_file():
-                        raise ValueError('La page ' + str(index) + ' est une image illisible sans reconnaissance de texte.')
-                    result = subprocess.run([str(converter), '-f', str(index), '-l', str(index), '-singlefile', '-scale-to', '2000', '-png', str(path), str(prefix)], capture_output=True, timeout=35)
-                    if result.returncode:
-                        raise ValueError('La page ' + str(index) + ' n’a pas pu être lue.')
+                    import pypdfium2 as pdfium
+                    pdf = pdfium.PdfDocument(str(path))
+                    try:
+                        rendered = pdf[index - 1]
+                        bitmap = rendered.render(scale=min(3, 2000 / max(rendered.get_size())))
+                        bitmap.to_pil().save(prefix.with_suffix('.png'))
+                        bitmap.close();rendered.close()
+                    finally:
+                        pdf.close()
                     text = ocr(prefix.with_suffix('.png'))
                     if not text:
                         text = '[Page sans texte détectable : contenu visuel non analysé.]'

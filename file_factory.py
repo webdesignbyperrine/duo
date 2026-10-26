@@ -17,7 +17,8 @@ import uuid
 import zipfile
 from xml.sax.saxutils import escape
 
-from attachments import RUNTIME, safe_name, parse, ocr
+from attachments import safe_name, parse, ocr
+from runtime_paths import worker_command, hidden_process, terminate_tree, office_binary, font_path
 
 FORMATS = ['docx', 'pdf', 'xlsx', 'pptx', 'csv', 'tsv', 'txt', 'md', 'html', 'json', 'xml', 'yaml', 'svg', 'png', 'jpg', 'zip', 'py', 'js', 'ts', 'css', 'sql', 'ics', 'tex', 'sh']
 MIME = {'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'pdf': 'application/pdf', 'png': 'image/png', 'jpg': 'image/jpeg', 'svg': 'image/svg+xml', 'zip': 'application/zip', 'html': 'text/html', 'json': 'application/json'}
@@ -56,26 +57,27 @@ def build(spec, stop_event=None):
         raise ValueError('Le contenu du fichier est trop volumineux pour cet échange.')
     name = safe_name(spec.get('name', 'livrable'))
     name = Path(name).stem + '.' + spec['format']
-    python = RUNTIME / 'python/bin/python3'
     with tempfile.TemporaryDirectory(prefix='duo-livrable-') as folder:
         try:
             with tempfile.TemporaryFile(mode='w+t') as stdin, tempfile.TemporaryFile(mode='w+t') as stdout, tempfile.TemporaryFile(mode='w+t') as stderr:
-                json.dump(dict(spec, name=name), stdin);stdin.seek(0)
-                process = subprocess.Popen([str(python), str(Path(__file__).resolve())], stdin=stdin, stdout=stdout, stderr=stderr, text=True, cwd=folder, start_new_session=True)
+                source = Path(folder) / 'spec.json'
+                output = Path(folder) / 'result.json'
+                source.write_text(json.dumps(dict(spec, name=name)), encoding='utf-8')
+                process = subprocess.Popen(worker_command('build', source, output), stdout=stdout, stderr=stderr, text=True, cwd=folder, start_new_session=True, **hidden_process())
                 try:
                     deadline = time.monotonic() + 150
                     while process.poll() is None:
                         if stop_event and stop_event.is_set():raise InterruptedError()
                         if time.monotonic() > deadline:raise RuntimeError('La construction du fichier a dépassé 150 secondes.')
                         time.sleep(.1)
-                    stdout.seek(0);payload = json.load(stdout)
+                    payload = json.loads(output.read_text(encoding='utf-8'))
                     returncode = process.returncode
                 finally:
                     if process.poll() is None:
-                        os.killpg(process.pid, signal.SIGTERM)
+                        terminate_tree(process)
                         try:process.wait(timeout=3)
                         except subprocess.TimeoutExpired:
-                            os.killpg(process.pid, signal.SIGKILL);process.wait()
+                            terminate_tree(process, True);process.wait()
         except (OSError, ValueError):
             raise RuntimeError('La construction de ce format a échoué ou pris trop de temps.')
         if returncode or payload.get('error'):
@@ -142,7 +144,7 @@ def create_document(path, content, kind):
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.lib.pagesizes import A4
-        pdfmetrics.registerFont(TTFont('DuoArial', '/System/Library/Fonts/Supplemental/Arial.ttf'))
+        pdfmetrics.registerFont(TTFont('DuoArial', font_path()))
         styles = getSampleStyleSheet()
         for name in ('BodyText', 'Title', 'Heading1', 'Heading2', 'Heading3'):
             styles[name].fontName = 'DuoArial'
@@ -207,11 +209,13 @@ def create_workbook(path, content):
     checked = load_workbook(path);checked.close()
     warnings = []
     if formulas:
-        soffice = RUNTIME / 'bin/override/soffice'
+        soffice = office_binary()
+        if not soffice:
+            raise ValueError('Installe LibreOffice avec son installateur graphique pour recalculer les formules, ou demande un tableau sans formules. Aucun classeur non recalculé n’a été livré.')
         with tempfile.TemporaryDirectory(prefix='duo-recalc-') as folder:
             out = Path(folder) / 'out';out.mkdir()
             profile = (Path(folder) / 'profile').as_uri()
-            process = subprocess.run([str(soffice), '-env:UserInstallation=' + profile, '--headless', '--convert-to', 'xlsx', '--outdir', str(out), str(path)], capture_output=True, timeout=45)
+            process = subprocess.run([str(soffice), '-env:UserInstallation=' + profile, '--headless', '--convert-to', 'xlsx', '--outdir', str(out), str(path)], capture_output=True, timeout=45, **hidden_process())
             candidate = out / path.name
             if process.returncode or not candidate.is_file():raise ValueError('Le recalcul des formules a échoué. Aucun classeur non recalculé n’a été livré.')
             calculated = load_workbook(candidate, data_only=True)
@@ -262,7 +266,7 @@ def create_image(path, content):
         x, y = int(element.get('x', 0)), int(element.get('y', 0));color = element.get('color', '#23312d')
         if element['type'] == 'text':
             size = max(10, min(120, int(element.get('size', 28))))
-            font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', size)
+            font = ImageFont.truetype(font_path(), size)
             text = str(element.get('text', ''));box = draw.multiline_textbbox((x, y), text, font=font, spacing=8)
             if min(box[0], box[1]) < 0 or box[2] > width or box[3] > height:raise ValueError('Un texte dépasse le cadre de l’image. Demande un dessin plus aéré.')
             draw.multiline_text((x, y), text, fill=color, font=font, spacing=8)

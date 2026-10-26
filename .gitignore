@@ -9,3 +9,8 @@ web/
 *checkpoint*
 .vercel
 .env*
+.build/
+dist/
+release/
+*.spec
+README 2.txt

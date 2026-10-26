@@ -19,8 +19,9 @@ from workflows import execute, execute_followup, MODES
 from file_factory import build_files, FORMATS
 from projects import from_upload, clone_github, materialize
 from sessions import Sessions
+from runtime_paths import ROOT, DESKTOP, provider_environment, provider_binary, hidden_process, terminate_tree
+from desktop_setup import setup
 
-ROOT = Path(__file__).resolve().parent
 PORT = 8786
 TOKEN = secrets.token_urlsafe(32)
 # Public configuration only: credentials are never written here.
@@ -35,24 +36,11 @@ if HOSTED_URL:
 
 
 def environment():
-    env = dict(os.environ)
-    for key in list(env):
-        if key.startswith(('ANTHROPIC_', 'OPENAI_', 'AZURE_OPENAI_', 'CLAUDE_CODE_USE_')) or key in ('CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDECODE'):
-            env.pop(key, None)
-    return env
+    return provider_environment()
 
 
 def binary(name):
-    found = shutil.which(name)
-    if found:
-        return found
-    candidates = [Path.home() / '.local/bin' / name]
-    if name == 'codex':
-        candidates.append(Path('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'))
-    for path in candidates:
-        if path.is_file():
-            return str(path)
-    raise RuntimeError(name + ' est introuvable sur cet ordinateur.')
+    return provider_binary(name)
 
 
 def authentication():
@@ -60,15 +48,15 @@ def authentication():
     for name in ('codex', 'claude'):
         try:
             command = [binary(name)] + (['login', 'status'] if name == 'codex' else ['auth', 'status'])
-            result = subprocess.run(command, capture_output=True, text=True, timeout=15, env=environment(), cwd=tempfile.gettempdir())
+            result = subprocess.run(command, capture_output=True, text=True, timeout=15, env=environment(), cwd=tempfile.gettempdir(), **hidden_process())
             if name == 'codex':
                 ok = result.returncode == 0 and 'using ChatGPT' in result.stdout + result.stderr
             else:
                 data = json.loads(result.stdout)
                 ok = data.get('loggedIn') is True and data.get('authMethod') == 'claude.ai'
-            status[name] = {'ok': ok, 'message': 'Compte d’abonnement reconnu' if ok else 'Connexion à l’abonnement requise'}
+            status[name] = {'ok': ok, 'installed': True, 'message': 'Compte d’abonnement reconnu' if ok else 'Connexion à l’abonnement requise'}
         except (OSError, ValueError, subprocess.TimeoutExpired, RuntimeError):
-            status[name] = {'ok': False, 'message': 'Connexion impossible à vérifier'}
+            status[name] = {'ok': False, 'installed': False, 'message': 'Connexion impossible à vérifier'}
     return status
 
 
@@ -343,7 +331,7 @@ class Discussion:
             with tempfile.TemporaryFile(mode='w+t') as stdout, tempfile.TemporaryFile(mode='w+t') as stderr:
                 if self.stop_event.is_set():
                     raise InterruptedError()
-                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=folder, env=environment(), start_new_session=True, text=True)
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=folder, env=environment(), start_new_session=True, text=True, **hidden_process())
                 try:
                     process.stdin.write(prompt)
                     process.stdin.close()
@@ -381,11 +369,11 @@ class Discussion:
                     return text.strip()
                 finally:
                     if process.poll() is None:
-                        os.killpg(process.pid, signal.SIGTERM)
+                        terminate_tree(process)
                         try:
                             process.wait(timeout=3)
                         except subprocess.TimeoutExpired:
-                            os.killpg(process.pid, signal.SIGKILL)
+                            terminate_tree(process, True)
                             process.wait()
 
     def run(self, rounds, followup=None):
@@ -484,6 +472,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(410, {'error': 'Cette discussion a été effacée. Ouvre une nouvelle discussion.'})
         if self.path == '/state':
             return self.send(200, discussion.snapshot())
+        if self.path == '/setup':
+            return self.send(200, setup.snapshot())
         if self.path == '/connections':
             return self.send(200, authentication())
         if self.path == '/attachments':
@@ -535,7 +525,15 @@ class Handler(BaseHTTPRequestHandler):
             discussion = sessions.get(self.headers.get('X-Duo-Session'))
             if discussion is None:
                 return self.send(410, {'error': 'Cette discussion a été effacée. Ouvre une nouvelle discussion.'})
-            if self.path == '/start':
+            if self.path == '/setup/action':
+                if discussion.snapshot()['running']:
+                    raise ValueError('Attends la fin de la réponse avant de modifier les connexions.')
+                setup.start(data.get('action'), data.get('provider'))
+                return self.send(200, setup.snapshot())
+            elif self.path == '/setup/code':
+                setup.submit_code(data.get('code'))
+                return self.send(200, setup.snapshot())
+            elif self.path == '/start':
                 discussion.start(data.get('topic'), data.get('rounds'), data.get('confirmed'), data.get('mode', 'discussion'), data.get('first', 'Codex'), data.get('sources', []), data.get('output_formats', []))
             elif self.path == '/followup':
                 discussion.followup(data.get('note'), data.get('recipient'), data.get('confirmed'), data.get('output_formats', []), data.get('sources'))

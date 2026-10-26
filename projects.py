@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import subprocess
+from runtime_paths import hidden_process
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -65,24 +66,47 @@ def git_environment():
 
 
 def git_base():
-    return [shutil.which('git') or '/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never']
+    git = shutil.which('git')
+    if not git:
+        raise ValueError('Git n’est pas installé sur cet ordinateur. Installe-le avec son installateur graphique ou joins les fichiers du dossier sans clonage.')
+    return [git, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never']
 
 
 def git_ignored(paths, contents):
     ignore_files = {p: raw for p, raw in contents.items() if PurePosixPath(p).name == '.gitignore'}
     if not ignore_files:
         return set()
-    with tempfile.TemporaryDirectory(prefix='duo-gitignore-') as folder:
-        root = Path(folder)
-        result = subprocess.run(git_base() + ['init', '-q', '--template=', str(root)], capture_output=True, env=git_environment(), timeout=15)
-        if result.returncode:
-            raise ValueError('Impossible de vérifier les règles .gitignore du projet.')
-        for path, raw in ignore_files.items():
-            target = root / path;target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(raw)
-        result = subprocess.run(git_base() + ['-C', folder, 'check-ignore', '--no-index', '-z', '--stdin'], input='\0'.join(paths).encode() + b'\0', capture_output=True, env=git_environment(), timeout=15)
-        if result.returncode not in (0, 1):
-            raise ValueError('Les règles .gitignore n’ont pas pu être évaluées.')
-        return {p.decode('utf-8') for p in result.stdout.split(b'\0') if p}
+    if shutil.which('git'):
+        with tempfile.TemporaryDirectory(prefix='duo-gitignore-') as folder:
+            root = Path(folder)
+            result = subprocess.run(git_base() + ['init', '-q', '--template=', str(root)], capture_output=True, env=git_environment(), timeout=15, **hidden_process())
+            if result.returncode:
+                raise ValueError('Impossible de vérifier les règles .gitignore du projet.')
+            for path, raw in ignore_files.items():
+                target = root / path;target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(raw)
+            result = subprocess.run(git_base() + ['-C', folder, 'check-ignore', '--no-index', '-z', '--stdin'], input='\0'.join(paths).encode() + b'\0', capture_output=True, env=git_environment(), timeout=15, **hidden_process())
+            if result.returncode not in (0, 1):
+                raise ValueError('Les règles .gitignore n’ont pas pu être évaluées.')
+            return {p.decode('utf-8') for p in result.stdout.split(b'\0') if p}
+    # Folder import remains available on computers without Git.
+    from pathspec import GitIgnoreSpec
+    specs={str(PurePosixPath(p).parent):GitIgnoreSpec.from_lines(raw.decode('utf-8-sig',errors='replace').splitlines()) for p,raw in ignore_files.items()}
+    ignored=set()
+    for path in paths:
+        parts=PurePosixPath(path).parts
+        inherited=[]
+        for depth in range(len(parts)):
+            parent='/'.join(parts[:depth]) or '.'
+            if parent in specs:inherited.append((depth,specs[parent]))
+            target='/'.join(parts[:depth+1])+('/' if depth<len(parts)-1 else '')
+            decision=None
+            for base,spec in inherited:
+                relative='/'.join(parts[base:depth+1])+('/' if depth<len(parts)-1 else '')
+                result=spec.check_file(relative)
+                if result.include is not None:decision=result.include
+            if decision:
+                ignored.add(path);break
+    return ignored
 
 
 def prepare_project(name, contents, excluded=None, origin=None):
@@ -179,6 +203,8 @@ def github_url(value):
 def limited_git(argv):
     # Le shell exécute une consigne constante ; URL, branche et chemins restent des arguments.
     # Évite preexec_fn, qui n'est pas sûr dans le serveur HTTP à plusieurs threads.
+    if os.name == 'nt':
+        return argv
     return ['/bin/sh', '-c', 'ulimit -f 245760 || exit 1; exec "$@"', 'duo-git', *argv]
 
 
@@ -198,14 +224,14 @@ def clone_github(value, branch=''):
         if branch:clone += ['--branch', branch]
         clone += ['--', url, str(target)]
         try:
-            result = subprocess.run(limited_git(clone), capture_output=True, env=env, timeout=100)
+            result = subprocess.run(limited_git(clone), capture_output=True, env=env, timeout=100, **hidden_process())
         except subprocess.TimeoutExpired:
             raise ValueError('Le clonage a dépassé 100 secondes. Vérifie l’accès au dépôt ou importe un dossier local plus petit.')
         if result.returncode:
             raise ValueError('Clonage impossible. Vérifie le lien, la branche et l’accès du compte GitHub connecté sur ce Mac. Aucun dépôt existant n’a été modifié.')
         def git(args, timeout=20):
             try:
-                process = subprocess.run(limited_git(command + ['-C', str(target)] + args), capture_output=True, env=env, timeout=timeout)
+                process = subprocess.run(limited_git(command + ['-C', str(target)] + args), capture_output=True, env=env, timeout=timeout, **hidden_process())
             except subprocess.TimeoutExpired:
                 raise ValueError('Une partie du dépôt est trop longue à télécharger. Essaie un dossier local plus petit.')
             if process.returncode:raise ValueError('Une partie du dépôt n’a pas pu être lue. Essaie un dossier local.')
