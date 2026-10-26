@@ -1,0 +1,55 @@
+name: Fabriquer les installateurs Duo
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            artifact: Duo-macOS-AppleSilicon
+          - runner: macos-15-intel
+            artifact: Duo-macOS-Intel
+          - runner: windows-2022
+            artifact: Duo-Windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Installer les bibliothèques de fabrication
+        run: python -m pip install -r requirements-desktop.txt
+      - name: Vérifier les profils et la confidentialité
+        run: python -m unittest test_desktop test_sessions test_projects
+      - name: Construire l’application et son installateur
+        run: python build_desktop.py --package
+      - name: Vérifier l’application Mac autonome
+        if: runner.os == 'macOS'
+        env:
+          DUO_DATA_DIR: ${{ runner.temp }}/duo-clean-profile
+        run: |
+          dist/Duo.app/Contents/MacOS/Duo --self-test --report release/self-test.json
+          python -c "import json; assert json.load(open('release/self-test.json'))['ok']"
+          codesign --verify --deep --strict dist/Duo.app
+      - name: Vérifier l’application Windows autonome
+        if: runner.os == 'Windows'
+        env:
+          DUO_DATA_DIR: ${{ runner.temp }}/duo-clean-profile
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath 'dist/Duo/Duo.exe' -ArgumentList '--self-test','--report','release/self-test.json' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw 'Le contrôle autonome a échoué.' }
+          python -c "import json; assert json.load(open('release/self-test.json'))['ok']"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
