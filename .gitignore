@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.vercel/
+web/
+.env
+.env.*
+*.log
+*checkpoint*
+.vercel
+.env*

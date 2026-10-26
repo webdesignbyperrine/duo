@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+test_*.py
+README 2.txt
+.git/
+web/
