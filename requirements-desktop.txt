@@ -7,3 +7,4 @@ reportlab==4.4.9
 Pillow==12.3.0
 pypdfium2==5.14.0
 pathspec==0.12.1
+certifi==2026.10.19

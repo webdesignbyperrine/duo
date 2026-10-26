@@ -1,5 +1,7 @@
 """Installation des binaires officiels vérifiés ; connexion personnelle sans terminal."""
 import hashlib
+import ssl
+import certifi
 import io
 import json
 import os
@@ -39,7 +41,7 @@ def download_verified(spec, progress):
     parsed=urllib.parse.urlsplit(spec['url'])
     if parsed.scheme!='https' or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS or not re.fullmatch(r'[a-f0-9]{64}',spec['sha256']):
         raise ValueError('Source de téléchargement non autorisée.')
-    opener=urllib.request.build_opener(TrustedRedirects())
+    opener=urllib.request.build_opener(TrustedRedirects(), urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())))
     digest=hashlib.sha256()
     with tempfile.TemporaryFile() as output:
         with opener.open(urllib.request.Request(spec['url'],headers={'User-Agent':'Duo/0.2'}),timeout=40) as response:
